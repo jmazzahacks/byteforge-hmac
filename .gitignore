@@ -1,0 +1,13 @@
+CLAUDE.md
+.claude
+.DS_Store
+*.pyc
+*.sqlite
+lib
+bin
+pyvenv.cfg
+.vscode
+main.py
+build_publish.sh
+dist
+dev_scripts
