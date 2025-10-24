@@ -170,12 +170,16 @@ authenticator = HMACAuthenticator(
 
 ### Persistent Nonce Storage
 
-For production environments with multiple server instances, use a shared storage backend:
+⚠️ **Required for Production:** For production environments with multiple server instances or concurrent request handling, you **MUST** use a thread-safe shared storage backend.
+
+**Redis provides atomic operations** that prevent the race condition in the default dict storage:
 
 ```python
 import redis
 
 class RedisNonceStorage:
+    """Thread-safe nonce storage using Redis"""
+
     def __init__(self, redis_client):
         self.redis = redis_client
 
@@ -184,16 +188,19 @@ class RedisNonceStorage:
 
     def __setitem__(self, key, value):
         # Store with expiration matching timestamp tolerance
+        # Redis operations are atomic, preventing race conditions
         self.redis.setex(key, 300, value)
 
     def __getitem__(self, key):
-        return self.redis.get(key)
+        result = self.redis.get(key)
+        return int(result) if result else None
 
     def items(self):
-        # Not needed for ReplayProtector, but required for dict-like interface
+        # Not needed for ReplayProtector cleanup logic with Redis
+        # Redis handles expiration automatically
         return []
 
-redis_client = redis.Redis(host='localhost', port=6379)
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
 nonce_storage = RedisNonceStorage(redis_client)
 
 authenticator = HMACAuthenticator(
@@ -201,6 +208,8 @@ authenticator = HMACAuthenticator(
     nonce_storage=nonce_storage
 )
 ```
+
+**Note:** Redis's atomic operations ensure that checking and storing a nonce happens atomically, preventing the race condition present in the default dict storage.
 
 ### Framework Integration Examples
 
@@ -358,10 +367,26 @@ The `timestamp_tolerance` parameter defines how old a request can be before it's
 
 ### Nonce Storage
 
-- **In-memory storage** (default dict): Simple but not suitable for multiple server instances
-- **Redis/Memcached**: Recommended for production with multiple servers
-- **Database**: Possible but may have performance implications
+⚠️ **CRITICAL: Thread Safety Warning**
+
+The default in-memory dictionary storage is **NOT thread-safe** and has a race condition vulnerability. In multi-threaded or multi-process environments (most production web servers), the same nonce can be accepted multiple times, bypassing replay protection.
+
+**Production Deployment Requirements:**
+
+- **❌ NEVER use default dict storage in production** with concurrent request handling
+- **✅ ALWAYS use thread-safe external storage** (Redis, Memcached, etc.) for production
+- **✅ Implement proper locking** if using custom storage backends
+
+**Storage Options:**
+
+- **In-memory storage** (default dict): **ONLY for single-threaded development/testing**
+- **Redis/Memcached**: **Required for production** with multiple workers/threads
+- **Database with row locking**: Possible but may have performance implications
 - Nonces should be stored for at least `timestamp_tolerance` duration
+
+**Example Production Setup with Redis:**
+
+See the "Persistent Nonce Storage" section above for Redis implementation with proper atomic operations.
 
 ### Secret Key Management
 
@@ -370,12 +395,49 @@ The `timestamp_tolerance` parameter defines how old a request can be before it's
 - Rotate keys periodically
 - Use cryptographically strong random keys (at least 32 bytes of entropy)
 
-### HTTPS
+### TLS/SSL Encryption
 
-Always use HTTPS in production. While HMAC provides request authentication and integrity, it does not encrypt the request body. HTTPS ensures:
+⚠️ **IMPORTANT: This library does NOT provide encryption**
+
+HMAC authentication provides:
+- ✅ Request authentication (proves who sent it)
+- ✅ Request integrity (detects tampering)
+- ❌ **NO encryption** of request/response data
+
+**Production Deployment Requirements:**
+
+Your application **MUST** be deployed behind a TLS-enabled reverse proxy (nginx, Apache, AWS ALB, etc.) to ensure:
 - Request/response confidentiality
 - Protection against man-in-the-middle attacks
 - Server authentication
+
+**Recommended Architecture:**
+
+```
+Internet → [Nginx with TLS] → [Your Python App with HMAC Auth]
+```
+
+**Example nginx configuration:**
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name api.example.com;
+
+    ssl_certificate /path/to/cert.pem;
+    ssl_certificate_key /path/to/key.pem;
+
+    location / {
+        proxy_pass http://localhost:5001;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+Without TLS, request bodies and secrets are transmitted in plaintext over the network.
 
 ## Testing
 
