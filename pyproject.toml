@@ -30,6 +30,11 @@ dependencies = [
   "requests",
 ]
 
+[project.urls]
+Homepage = "https://github.com/jmazzahacks/byteforge-hmac"
+Repository = "https://github.com/jmazzahacks/byteforge-hmac"
+Issues = "https://github.com/jmazzahacks/byteforge-hmac/issues"
+
 [project.optional-dependencies]
 dev = [
   "pytest>=7.0",
