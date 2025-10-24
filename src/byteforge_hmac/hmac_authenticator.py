@@ -58,21 +58,22 @@ class HMACAuthenticator:
 
         Returns:
             True if authentication succeeds, False otherwise
+
+        Note:
+            Authentication order is important for security:
+            1. Timestamp validation (cheap, rejects stale requests)
+            2. Signature verification (expensive, proves request authenticity)
+            3. Replay check (only stores nonces for valid requests)
+
+            This order prevents DoS attacks via nonce storage poisoning.
         """
-        # Validate timestamp
+        # Step 1: Validate timestamp (cheap check, reject stale requests early)
         if not self.timestamp_validator.validate(auth_request.timestamp):
             return False
 
-        # Check for replay
-        if not self.replay_protector.check_and_store(
-            auth_request.client_id,
-            auth_request.nonce,
-            auth_request.timestamp,
-            self.timestamp_tolerance
-        ):
-            return False
-
-        # Verify signature
+        # Step 2: Verify signature (cryptographic validation)
+        # Only proceed to replay check if signature is valid
+        # This prevents attackers from filling nonce storage with invalid requests
         if not self.hmac_validator.verify_signature(
             auth_request.client_id,
             auth_request.timestamp,
@@ -83,6 +84,16 @@ class HMACAuthenticator:
             body
         ):
             logger.warning(f"Invalid signature for client {auth_request.client_id}")
+            return False
+
+        # Step 3: Check for replay (only after signature is verified)
+        # This ensures we only store nonces for cryptographically valid requests
+        if not self.replay_protector.check_and_store(
+            auth_request.client_id,
+            auth_request.nonce,
+            auth_request.timestamp,
+            self.timestamp_tolerance
+        ):
             return False
 
         logger.info(f"Successfully authenticated client {auth_request.client_id} for {method} {path}")
